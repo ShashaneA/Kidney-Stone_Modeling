@@ -239,29 +239,6 @@ for col in ["ss_caox", "ss_cap"]:
               f"mean={final_df[col].mean():.4f}")
 
 # =========================================================
-# THERMODYNAMIC CORRECTIONS
-#
-# =========================================================
-
-def free_calcium(ca, citrate):
-    """Approximate free Ca²⁺ accounting for citrate complexation."""
-    return ca / (1 + 0.5 * citrate)
-
-def effective_oxalate(ox, mg):
-    """Approximate free oxalate accounting for Mg complexation."""
-    return ox / (1 + 0.1 * mg)
-
-final_df["ca_free"] = free_calcium(
-    final_df["calcium_mmol_L"],
-    final_df["citrate_mmol_L"]
-)
-
-final_df["ox_effective"] = effective_oxalate(
-    final_df["oxalate_mmol_L"],
-    final_df["magnesium_mmol_L"]
-)
-
-# =========================================================
 # NORMALIZATION FUNCTION
 # =========================================================
 
