@@ -1,0 +1,661 @@
+# =========================================================
+# PROJECT.py
+# EQUIL2 Thermodynamic Kidney Stone Modeling
+# Publication-Style Thermodynamic Visualization
+# =========================================================
+
+# =========================================================
+# IMPORTS
+# =========================================================
+
+import pandas as pd
+import numpy as np
+import subprocess
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+# =========================================================
+# LOAD DATA
+# =========================================================
+
+df = pd.read_excel("S1_Data.xlsx")
+
+# =========================================================
+# CLEAN COLUMN NAMES
+# =========================================================
+
+df.columns = (
+    df.columns
+    .str.lower()
+    .str.strip()
+)
+
+print("\nAVAILABLE COLUMNS:")
+print(df.columns.tolist())
+
+# =========================================================
+# RENAME COLUMNS
+# =========================================================
+
+df = df.rename(columns={
+    "volume (ml)":      "volume_ml",
+    "ca(mmol/24h)":     "calcium_day",
+    "ox(mmol/24h)":     "oxalate_day",
+    "cit(mmol/24h)":    "citrate_day",
+    "mg(mmol/24h)":     "magnesium_day",
+    "na(mmol/24h)":     "sodium_day",
+    "k(mmol/24h)":      "potassium_day",
+    "cl(mmol/24h)":     "chloride_day",
+    "p(mmol/24h)":      "phosphate_day",
+    "ua(mmol/24h)":     "urate_day",
+    "urine ph value":   "ph",
+    "aps(caox)":        "ss_caox_raw",   # renamed to avoid collision
+    "aps(cap)":         "ss_cap_raw"     # renamed to avoid collision
+})
+
+# =========================================================
+# REQUIRED COLUMNS
+# =========================================================
+
+required_columns = [
+    "volume_ml",
+    "calcium_day",
+    "oxalate_day",
+    "citrate_day",
+    "magnesium_day",
+    "sodium_day",
+    "potassium_day",
+    "chloride_day",
+    "phosphate_day",
+    "urate_day",
+    "ph"
+]
+
+# =========================================================
+# VERIFY REQUIRED COLUMNS
+# =========================================================
+
+for col in required_columns:
+    if col not in df.columns:
+        raise ValueError(f"Missing required column: {col}")
+
+# =========================================================
+# CLEAN DATA
+# =========================================================
+
+df = df.replace([np.inf, -np.inf], np.nan)
+
+for col in required_columns:
+    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+df = df.dropna(subset=required_columns)
+
+# =========================================================
+# FILTER DATA
+# =========================================================
+
+df["volume_L"] = df["volume_ml"] / 1000
+
+df = df[df["volume_L"] > 0]
+df = df[(df["ph"] > 3) & (df["ph"] < 10)]
+
+print(f"\nVALID ROWS: {len(df)}")
+
+# =========================================================
+# UNIT CONVERSION: mmol/day --> mmol/L
+# =========================================================
+
+def to_mmol_L(series, volume_L):
+    return series / volume_L
+
+vol = df["volume_L"]
+
+df["sodium_mmol_L"]    = to_mmol_L(df["sodium_day"],    vol)
+df["potassium_mmol_L"] = to_mmol_L(df["potassium_day"], vol)
+df["chloride_mmol_L"]  = to_mmol_L(df["chloride_day"],  vol)
+df["calcium_mmol_L"]   = to_mmol_L(df["calcium_day"],   vol)
+df["magnesium_mmol_L"] = to_mmol_L(df["magnesium_day"], vol)
+df["phosphate_mmol_L"] = to_mmol_L(df["phosphate_day"], vol)
+df["oxalate_mmol_L"]   = to_mmol_L(df["oxalate_day"],   vol)
+df["citrate_mmol_L"]   = to_mmol_L(df["citrate_day"],   vol)
+df["urate_mmol_L"]     = to_mmol_L(df["urate_day"],     vol)
+
+# =========================================================
+# DEFAULT VALUES FOR UNMEASURED IONS
+# =========================================================
+
+df["ammonium_mmol_L"] = 30
+df["sulfate_mmol_L"]  = 10
+
+# =========================================================
+# CREATE EQUIL2 INPUT FILE
+# =========================================================
+
+equil_inputs = pd.DataFrame({
+    "sodium_mmol_L":    df["sodium_mmol_L"],
+    "potassium_mmol_L": df["potassium_mmol_L"],
+    "ammonium_mmol_L":  df["ammonium_mmol_L"],
+    "chloride_mmol_L":  df["chloride_mmol_L"],
+    "calcium_mmol_L":   df["calcium_mmol_L"],
+    "magnesium_mmol_L": df["magnesium_mmol_L"],
+    "sulfate_mmol_L":   df["sulfate_mmol_L"],
+    "phosphate_mmol_L": df["phosphate_mmol_L"],
+    "oxalate_mmol_L":   df["oxalate_mmol_L"],
+    "citrate_mmol_L":   df["citrate_mmol_L"],
+    "urate_mmol_L":     df["urate_mmol_L"],
+    "pH":               df["ph"],
+    "volume_L":         df["volume_L"]
+})
+
+equil_inputs.to_csv("inputs.csv", index=False)
+print("\ninputs.csv CREATED")
+
+# =========================================================
+# RUN EQUIL2
+# =========================================================
+
+try:
+    result = subprocess.run(
+        ["Rscript", "run_equil2_batch.R"],
+        check=True,
+        capture_output=True,
+        text=True
+    )
+    print("\nR OUTPUT:")
+    print(result.stdout)
+
+except subprocess.CalledProcessError as e:
+    print("\nR SCRIPT FAILED")
+    print("\nSTDOUT:")
+    print(e.stdout)
+    print("\nSTDERR:")
+    print(e.stderr)
+    raise
+
+# =========================================================
+# LOAD EQUIL2 OUTPUTS
+# =========================================================
+
+equil_outputs = pd.read_csv("outputs.csv")
+
+print("\nEQUIL2 OUTPUTS (first 5 rows):")
+print(equil_outputs.head())
+print("\nEQUIL2 COLUMN NAMES:")
+print(equil_outputs.columns.tolist())
+
+# =========================================================
+# COMBINE DATA
+# FIX: Drop any pre-existing ss_ columns from df before
+# merging, so EQUIL2 values are not overwritten or dropped
+# by deduplication.
+# =========================================================
+
+ss_cols_to_drop = [
+    c for c in df.columns
+    if c.startswith("ss_") or c in ["ss_caox_raw", "ss_cap_raw"]
+]
+
+df_clean = df.drop(columns=ss_cols_to_drop, errors="ignore")
+
+final_df = pd.concat(
+    [
+        df_clean.reset_index(drop=True),
+        equil_outputs.reset_index(drop=True)
+    ],
+    axis=1
+)
+
+# Remove any remaining duplicate columns
+final_df = final_df.loc[:, ~final_df.columns.duplicated()]
+
+print("\nFINAL_DF COLUMNS:")
+print(final_df.columns.tolist())
+
+# =========================================================
+# VERIFY EQUIL2 SS COLUMNS ARE PRESENT AND POPULATED
+# =========================================================
+
+for col in ["ss_caox", "ss_cap"]:
+    if col not in final_df.columns:
+        print(f"WARNING: {col} not found in EQUIL2 outputs — defaulting to 0")
+        final_df[col] = 0.0
+    else:
+        print(f"{col}: min={final_df[col].min():.4f}  "
+              f"max={final_df[col].max():.4f}  "
+              f"mean={final_df[col].mean():.4f}")
+
+# =========================================================
+# THERMODYNAMIC CORRECTIONS
+# =========================================================
+
+def free_calcium(ca, citrate):
+    """Approximate free Ca²⁺ accounting for citrate complexation."""
+    return ca / (1 + 0.5 * citrate)
+
+def effective_oxalate(ox, mg):
+    """Approximate free oxalate accounting for Mg complexation."""
+    return ox / (1 + 0.1 * mg)
+
+final_df["ca_free"] = free_calcium(
+    final_df["calcium_mmol_L"],
+    final_df["citrate_mmol_L"]
+)
+
+final_df["ox_effective"] = effective_oxalate(
+    final_df["oxalate_mmol_L"],
+    final_df["magnesium_mmol_L"]
+)
+
+# =========================================================
+# NORMALIZATION FUNCTION
+# =========================================================
+
+def normalize(x):
+    x = pd.to_numeric(x, errors="coerce").fillna(0)
+    rng = x.max() - x.min()
+    if rng == 0:
+        return np.zeros(len(x))
+    return (x - x.min()) / rng
+
+# =========================================================
+# SORT DATA BY pH FOR PLOTTING
+# =========================================================
+
+df_spec = final_df.sort_values("ph").copy()
+
+ph       = np.array(df_spec["ph"],            dtype=float)
+calcium  = np.clip(normalize(df_spec["ca_free"]),          0, 1)
+citrate  = np.clip(normalize(df_spec["citrate_mmol_L"]),   0, 1)
+magnesium= np.clip(normalize(df_spec["magnesium_mmol_L"]), 0, 1)
+oxalate  = np.clip(normalize(df_spec["ox_effective"]),     0, 1)
+
+# =========================================================
+# PH CURVE FOR EQUILIBRIUM LINES
+# =========================================================
+
+ph_curve = np.linspace(4.5, 8.0, 500)
+
+# =========================================================
+# EQUILIBRIUM CURVES (thermodynamic reference lines)
+# =========================================================
+
+calcium_eq = np.piecewise(
+    ph_curve,
+    [
+        ph_curve < 4.9,
+        (ph_curve >= 4.9) & (ph_curve < 6.9),
+        ph_curve >= 6.9
+    ],
+    [
+        lambda x: 0.8 * (x - 4.5) / (4.9 - 4.5),
+        0.8,
+        1.0
+    ]
+)
+
+citrate_eq = np.piecewise(
+    ph_curve,
+    [
+        ph_curve < 5.5,
+        (ph_curve >= 5.5) & (ph_curve < 6.1),
+        (ph_curve >= 6.1) & (ph_curve < 6.5),
+        (ph_curve >= 6.5) & (ph_curve < 7.9),
+        ph_curve >= 7.9
+    ],
+    [
+        0.0,
+        0.05,
+        lambda x: 0.05 + (0.6 - 0.05) * (x - 6.1) / (6.5 - 6.1),
+        0.6,
+        lambda x: 0.6 + (1.0 - 0.6) * (x - 7.9) / (8.0 - 7.9)
+    ]
+)
+
+magnesium_eq = np.zeros_like(ph_curve)
+oxalate_eq   = np.zeros_like(ph_curve)
+
+# =========================================================
+# FIGURE 1: THERMODYNAMIC BEHAVIOUR PLOT
+# =========================================================
+
+fig, ax = plt.subplots(figsize=(14, 10), facecolor="#f7f5f2")
+ax.set_facecolor("#f7f5f2")
+
+# Supersaturation zone shading
+ax.axhspan(1.0, 1.15, color="#8B0000", alpha=0.05)
+
+# Equilibrium ceiling
+ax.axhline(
+    y=1.0, color="black", linestyle="--",
+    linewidth=2.5, alpha=0.8, label="Equilibrium ceiling"
+)
+
+# Physiologic pH band
+ax.axvspan(6.0, 7.5, color="#c8e6c9", alpha=0.12)
+
+# Scatter: observed patient data
+ax.scatter(ph, calcium,   s=18, color="#2f6b2f", alpha=0.22)
+ax.scatter(ph, citrate,   s=18, color="#d77b00", alpha=0.22)
+ax.scatter(ph, magnesium, s=18, color="#2c78c4", alpha=0.22)
+ax.scatter(ph, oxalate,   s=18, color="#8e44ad", alpha=0.22)
+
+# Equilibrium reference lines
+ax.plot(ph_curve, calcium_eq,  color="#2f6b2f", linewidth=3.5, label="Calcium (Ca²⁺)")
+ax.plot(ph_curve, citrate_eq,  color="#d77b00", linewidth=3.5, label="Citrate (Cit³⁻)")
+ax.plot(ph_curve, magnesium_eq,color="#2c78c4", linewidth=3.5, label="Magnesium (Mg²⁺)")
+ax.plot(ph_curve, oxalate_eq,  color="#8e44ad", linewidth=3.5, label="Oxalate (Ox²⁻)")
+
+# End-of-line species labels (FIX: unique y offsets)
+label_specs = [
+    (8.02,  1.00, "Calcium (Ca²⁺)",   "#2f6b2f"),
+    (8.02,  0.62, "Citrate (Cit³⁻)",  "#d77b00"),
+    (8.02,  0.04, "Magnesium (Mg²⁺)", "#2c78c4"),
+    (8.02, -0.04, "Oxalate (Ox²⁻)",   "#8e44ad"),
+]
+for xpos, ypos, label, color in label_specs:
+    ax.text(xpos, ypos, label, color=color, fontsize=12,
+            va="center", clip_on=False)
+
+# Annotations
+ax.text(5.0,  1.05, "Supersaturation zone  (precipitation risk)",
+        fontsize=13, color="#b22222", style="italic")
+ax.text(6.08, 0.03, "Physiologic\npH range",
+        fontsize=12, color="#446644", style="italic")
+
+# Axes styling
+ax.set_xlabel("Urine pH", fontsize=20)
+ax.set_ylabel(
+    "Normalised Ion Concentration\n(relative to equilibrium maximum)",
+    fontsize=18
+)
+ax.set_title(
+    "EQUIL2-Based Thermodynamic Behaviour of Major Urinary Species\n\n"
+    "n = 538 patients — Calcium oxalate stone-forming cohort",
+    fontsize=22, pad=20
+)
+
+for spine in ax.spines.values():
+    spine.set_linewidth(1.5)
+
+ax.tick_params(axis="both", which="major",
+               labelsize=14, width=1.4, length=7, direction="in")
+ax.minorticks_on()
+ax.set_xlim(4.3, 8.5)
+ax.set_ylim(-0.08, 1.15)
+ax.grid(alpha=0.12)
+
+ax.legend(fontsize=13, frameon=True, facecolor="#f1f1f1", loc="upper left")
+
+plt.tight_layout()
+plt.savefig("thermodynamic_behaviour.png", dpi=150, bbox_inches="tight")
+plt.show()
+print("\nSaved: thermodynamic_behaviour.png")
+
+# =========================================================
+# RISK MODEL
+# =========================================================
+
+# ----------------------------------------------------------
+# FIX 1: log-transform supersaturation values before
+# normalising. SS spans many orders of magnitude (1 to 10¹³),
+# so raw normalisation would compress all variation to zero.
+# log1p(x) = log(1+x) is safe for x=0.
+# ----------------------------------------------------------
+
+final_df["log_ss_caox"] = np.log1p(
+    pd.to_numeric(final_df["ss_caox"], errors="coerce").fillna(0).clip(lower=0)
+)
+
+final_df["log_ss_cap"] = np.log1p(
+    pd.to_numeric(final_df["ss_cap"], errors="coerce").fillna(0).clip(lower=0)
+)
+
+# ----------------------------------------------------------
+# Also log-transform brushite and uric acid if available
+# ----------------------------------------------------------
+
+if "ss_brushite" in final_df.columns:
+    final_df["log_ss_brushite"] = np.log1p(
+        pd.to_numeric(final_df["ss_brushite"], errors="coerce").fillna(0).clip(lower=0)
+    )
+else:
+    final_df["log_ss_brushite"] = 0.0
+
+if "ss_uric_acid" in final_df.columns:
+    final_df["log_ss_uric_acid"] = np.log1p(
+        pd.to_numeric(final_df["ss_uric_acid"], errors="coerce").fillna(0).clip(lower=0)
+    )
+else:
+    final_df["log_ss_uric_acid"] = 0.0
+
+# ----------------------------------------------------------
+# NORMALIZE RISK VARIABLES (after log transform for SS)
+# ----------------------------------------------------------
+
+final_df["calcium_risk"]   = normalize(final_df["calcium_mmol_L"])
+final_df["oxalate_risk"]   = normalize(final_df["oxalate_mmol_L"])
+final_df["caox_ss_risk"]   = normalize(final_df["log_ss_caox"])
+final_df["cap_ss_risk"]    = normalize(final_df["log_ss_cap"])
+
+# Protective factors
+final_df["citrate_protection"]   = normalize(final_df["citrate_mmol_L"])
+final_df["magnesium_protection"] = normalize(final_df["magnesium_mmol_L"])
+
+# ----------------------------------------------------------
+# STONE RISK SCORE (weighted composite)
+# ----------------------------------------------------------
+
+final_df["stone_risk_score"] = np.clip(
+    (
+        0.30 * final_df["caox_ss_risk"]      # primary: CaOx supersaturation
+      + 0.20 * final_df["calcium_risk"]       # free calcium load
+      + 0.20 * final_df["oxalate_risk"]       # oxalate load
+      + 0.15 * final_df["cap_ss_risk"]        # brushite / CAP risk
+      - 0.10 * final_df["citrate_protection"] # inhibitor
+      - 0.05 * final_df["magnesium_protection"]# inhibitor
+    ),
+    0, 1
+)
+
+# ----------------------------------------------------------
+# FIX 2: Percentile-based thresholds so risk categories
+# reflect the actual distribution, not arbitrary constants.
+# High = top 25%, Moderate = middle 25%, Low = bottom 50%.
+# ----------------------------------------------------------
+
+p75 = final_df["stone_risk_score"].quantile(0.75)
+p50 = final_df["stone_risk_score"].quantile(0.50)
+
+print(f"\nRisk score distribution:")
+print(final_df["stone_risk_score"].describe().round(4))
+print(f"\nThresholds — p50: {p50:.4f}  |  p75: {p75:.4f}")
+
+def classify_risk(score):
+    if score >= p75:
+        return "High Risk"
+    elif score >= p50:
+        return "Moderate Risk"
+    else:
+        return "Low Risk"
+
+final_df["stone_risk_label"] = final_df["stone_risk_score"].apply(classify_risk)
+
+# =========================================================
+# PATIENT IDs
+# =========================================================
+
+final_df["patient_id"] = np.arange(1, len(final_df) + 1)
+
+# =========================================================
+# RESULTS TABLE
+# =========================================================
+
+risk_results = final_df[[
+    "patient_id",
+    "ph",
+    "calcium_mmol_L",
+    "oxalate_mmol_L",
+    "citrate_mmol_L",
+    "magnesium_mmol_L",
+    "ss_caox",
+    "ss_cap",
+    "stone_risk_score",
+    "stone_risk_label"
+]].sort_values("stone_risk_score", ascending=False)
+
+# =========================================================
+# PRINT RESULTS
+# =========================================================
+
+print("\n====================================")
+print("PATIENT KIDNEY STONE RISK RESULTS")
+print("====================================\n")
+print(risk_results.head(20).to_string())
+
+# =========================================================
+# SAVE CSV
+# =========================================================
+
+risk_results.to_csv("patient_kidney_stone_risk_results.csv", index=False)
+print("\nSaved: patient_kidney_stone_risk_results.csv")
+
+# =========================================================
+# RISK CATEGORY COUNTS
+# =========================================================
+
+print("\nRISK CATEGORY COUNTS:\n")
+print(risk_results["stone_risk_label"].value_counts())
+
+# =========================================================
+# HIGH RISK PATIENTS
+# =========================================================
+
+high_risk = risk_results[risk_results["stone_risk_label"] == "High Risk"]
+print(f"\nHIGH RISK PATIENTS ({len(high_risk)} total):\n")
+print(high_risk.head(20).to_string())
+
+# =========================================================
+# FIGURE 2: RISK SCORE DISTRIBUTION
+# =========================================================
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 6), facecolor="#f7f5f2")
+
+# --- Panel A: Score histogram with risk zone shading ---
+ax1 = axes[0]
+ax1.set_facecolor("#f7f5f2")
+
+scores = risk_results["stone_risk_score"]
+
+ax1.axvspan(0,    p50,  color="#4CAF50", alpha=0.12, label=f"Low Risk  (<{p50:.2f})")
+ax1.axvspan(p50,  p75,  color="#FF9800", alpha=0.12, label=f"Moderate ({p50:.2f}–{p75:.2f})")
+ax1.axvspan(p75,  1.0,  color="#F44336", alpha=0.12, label=f"High Risk (≥{p75:.2f})")
+
+ax1.axvline(p50, color="#FF9800", linestyle="--", linewidth=1.8)
+ax1.axvline(p75, color="#F44336", linestyle="--", linewidth=1.8)
+
+ax1.hist(scores, bins=40, color="#34495e", edgecolor="white",
+         linewidth=0.6, alpha=0.85)
+
+ax1.set_xlabel("Stone Risk Score", fontsize=15)
+ax1.set_ylabel("Number of Patients", fontsize=15)
+ax1.set_title("Risk Score Distribution\n(percentile-based thresholds)", fontsize=16)
+ax1.legend(fontsize=11, frameon=True)
+ax1.tick_params(labelsize=12)
+
+for spine in ax1.spines.values():
+    spine.set_linewidth(1.3)
+
+# --- Panel B: Bar chart of risk category counts ---
+ax2 = axes[1]
+ax2.set_facecolor("#f7f5f2")
+
+counts = risk_results["stone_risk_label"].value_counts()
+order  = ["High Risk", "Moderate Risk", "Low Risk"]
+colors = ["#F44336", "#FF9800", "#4CAF50"]
+
+bars = ax2.bar(
+    [o for o in order if o in counts.index],
+    [counts[o] for o in order if o in counts.index],
+    color=[c for o, c in zip(order, colors) if o in counts.index],
+    edgecolor="white", linewidth=1.2, width=0.5
+)
+
+for bar in bars:
+    h = bar.get_height()
+    ax2.text(bar.get_x() + bar.get_width() / 2, h + 3,
+             f"{int(h)}\n({100*h/len(risk_results):.1f}%)",
+             ha="center", va="bottom", fontsize=13, fontweight="bold")
+
+ax2.set_ylabel("Number of Patients", fontsize=15)
+ax2.set_title("Patients by Risk Category", fontsize=16)
+ax2.tick_params(labelsize=13)
+ax2.set_ylim(0, counts.max() * 1.18)
+
+for spine in ax2.spines.values():
+    spine.set_linewidth(1.3)
+
+plt.suptitle(
+    "EQUIL2 Kidney Stone Risk Stratification  —  n = 538 patients",
+    fontsize=18, y=1.02, fontweight="bold"
+)
+
+plt.tight_layout()
+plt.savefig("risk_distribution.png", dpi=150, bbox_inches="tight")
+plt.show()
+print("\nSaved: risk_distribution.png")
+
+# =========================================================
+# FIGURE 3: CaOx SS vs pH coloured by risk category
+# =========================================================
+
+fig, ax = plt.subplots(figsize=(12, 7), facecolor="#f7f5f2")
+ax.set_facecolor("#f7f5f2")
+
+color_map = {
+    "Low Risk":      "#4CAF50",
+    "Moderate Risk": "#FF9800",
+    "High Risk":     "#F44336"
+}
+
+for label, grp in final_df.groupby("stone_risk_label"):
+    ax.scatter(
+        grp["ph"],
+        np.log1p(grp["ss_caox"]),
+        c=color_map[label],
+        s=25, alpha=0.55,
+        label=label,
+        edgecolors="none"
+    )
+
+ax.axhline(np.log1p(1), color="black", linestyle="--",
+           linewidth=1.8, alpha=0.6, label="SS = 1 (equilibrium)")
+
+ax.set_xlabel("Urine pH", fontsize=17)
+ax.set_ylabel("log(1 + SS CaOx)", fontsize=17)
+ax.set_title(
+    "Calcium Oxalate Supersaturation vs Urine pH\n"
+    "Coloured by Stone Risk Category",
+    fontsize=18, pad=14
+)
+
+ax.legend(fontsize=13, frameon=True, facecolor="#f1f1f1")
+ax.tick_params(labelsize=13)
+
+for spine in ax.spines.values():
+    spine.set_linewidth(1.4)
+
+ax.grid(alpha=0.12)
+plt.tight_layout()
+plt.savefig("ss_vs_ph_by_risk.png", dpi=150, bbox_inches="tight")
+plt.show()
+print("\nSaved: ss_vs_ph_by_risk.png")
+
+# =========================================================
+# DONE
+# =========================================================
+
+print("\n=== PIPELINE COMPLETE ===")
+print(f"Total patients processed : {len(final_df)}")
+print(f"High Risk                : {(final_df['stone_risk_label']=='High Risk').sum()}")
+print(f"Moderate Risk            : {(final_df['stone_risk_label']=='Moderate Risk').sum()}")
+print(f"Low Risk                 : {(final_df['stone_risk_label']=='Low Risk').sum()}")
