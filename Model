@@ -6,6 +6,7 @@
 
 # =========================================================
 # IMPORTS
+#To begin, we first had to import the needed to import the necessary python libraries. The libraries necessary for our project would be pandas, numpy, subprocess and matplotlib. 
 # =========================================================
 
 import pandas as pd
@@ -16,12 +17,14 @@ import matplotlib.patches as mpatches
 
 # =========================================================
 # LOAD DATA
+#The data used for this project is Urinalysis data from diabetic patients. The most important features were the concentrations of minerals in their urine samples. This concentrations were measured in mmol/24hr.
 # =========================================================
 
 df = pd.read_excel("S1_Data.xlsx")
 
 # =========================================================
 # CLEAN COLUMN NAMES
+#After importing data, we had to clean up the names of the columns, as when they are imported the text is not code friendly. Here, we are editing it to make it easier for python to read.
 # =========================================================
 
 df.columns = (
@@ -35,6 +38,7 @@ print(df.columns.tolist())
 
 # =========================================================
 # RENAME COLUMNS
+#Here we are renaming the columns to not include their concentration, rather just the mineral being detected over the 24 hour period to make it easier for python to understand.
 # =========================================================
 
 df = df.rename(columns={
@@ -55,6 +59,7 @@ df = df.rename(columns={
 
 # =========================================================
 # REQUIRED COLUMNS
+# In 24 hours urine tests, the minerals they most commonly detect are calcium, magnesium, phosphate, sodium, potassium, chloride, and oxalate. The other reported values from the tests are volume and pH. Our project is aiming to detect the likelyhood of kidney stones. Kidney stones are pebble like solids that form in the kidneys when there is a high mineral concentration in the kidney. The abnormalities that point towards the likely hood of kidney stones are high concentrations of urine calcium, oxalate, sodium, or uric acid.
 # =========================================================
 
 required_columns = [
@@ -73,6 +78,7 @@ required_columns = [
 
 # =========================================================
 # VERIFY REQUIRED COLUMNS
+#At this point, we are double checking that our csv file has data under the column names from which we desire to extract data from. For example, making sure that there is a column that has Oxalate concentration, as this is one of our column titles.
 # =========================================================
 
 for col in required_columns:
@@ -81,6 +87,7 @@ for col in required_columns:
 
 # =========================================================
 # CLEAN DATA
+#Cleaning the data removes any pieces of information that could hinder our code from running or remove participants that do not have all the required concentrations recorded for the test. This is important to maintain that we have a good measure whether or not kidney stones are likely to form and also, we need consistent data across the board to compare the different concentrations to each other.
 # =========================================================
 
 df = df.replace([np.inf, -np.inf], np.nan)
@@ -92,6 +99,7 @@ df = df.dropna(subset=required_columns)
 
 # =========================================================
 # FILTER DATA
+#We now are filtering the data t make sure that we only have reported volumes that are above 0 L, as this would imply there is no sample. We also want to filter for pH, since we would only like pH values above 3 and less than 10. Normal human urine has a pH within a range of 4.5 to 8. Filtering the pH to be within 3-10 gives a reasonable range for human urinalysis and removes interrupting factors.
 # =========================================================
 
 df["volume_L"] = df["volume_ml"] / 1000
@@ -103,6 +111,7 @@ print(f"\nVALID ROWS: {len(df)}")
 
 # =========================================================
 # UNIT CONVERSION: mmol/day --> mmol/L
+#The concentrations units were changed in order to match the units of the platform that will be reading the data we input to assess kidney stone risk, which is Equil2.
 # =========================================================
 
 def to_mmol_L(series, volume_L):
@@ -122,6 +131,7 @@ df["urate_mmol_L"]     = to_mmol_L(df["urate_day"],     vol)
 
 # =========================================================
 # DEFAULT VALUES FOR UNMEASURED IONS
+#The platform that we will be using, as discussed in the following section, requires that there are measured values for ammonium and sulfate. Since the 24 hour urine test data that we have access to did not provide those values, we decided on base values to add to each test. The values act as placeholders, since there are necessary in the Equil2 calculation of ionic strength that will further be needed to do a risk assessment for kidney stone formation.
 # =========================================================
 
 df["ammonium_mmol_L"] = 30
@@ -129,6 +139,7 @@ df["sulfate_mmol_L"]  = 10
 
 # =========================================================
 # CREATE EQUIL2 INPUT FILE
+#Equil2 is the platform we used to upload the file to read our data. After reading the data, Equil2, will provide us a conclusion of whether or not the individuals with certain concentrations are either likely to or unlikely to form kidney stones. 
 # =========================================================
 
 equil_inputs = pd.DataFrame({
@@ -152,6 +163,7 @@ print("\ninputs.csv CREATED")
 
 # =========================================================
 # RUN EQUIL2
+#While Equil2 is running, it is performing calculations that will determine the relative supersaturation of kidney stone forming salts. The supersaturation calculations use thermodynamic stability constants to determine the free ion activity products. These are then compared to the solubilty product of the different salts. 
 # =========================================================
 
 try:
@@ -174,6 +186,7 @@ except subprocess.CalledProcessError as e:
 
 # =========================================================
 # LOAD EQUIL2 OUTPUTS
+#The outputs of this are the relative super saturation ratio (RSS). When the RSS is greater than 1, this means that supersaturation of kidney forming salts is present, meaning the individual is high risk to the formation of kidney stones. If the RSS is less than 1, that means we are undersaturation. Undersaturation indicates that there is a lowrisk or that the individual is unlikely to form kidney stones.
 # =========================================================
 
 equil_outputs = pd.read_csv("outputs.csv")
@@ -212,7 +225,8 @@ print("\nFINAL_DF COLUMNS:")
 print(final_df.columns.tolist())
 
 # =========================================================
-# VERIFY EQUIL2 SS COLUMNS ARE PRESENT AND POPULATED
+# VERIFY EQUIL2 SS COLUMNS ARE PRESENT AND POPULATED 
+#This step ensures that our ouput tells us which samples have RSS values that demonstrate supersaturation
 # =========================================================
 
 for col in ["ss_caox", "ss_cap"]:
@@ -226,6 +240,7 @@ for col in ["ss_caox", "ss_cap"]:
 
 # =========================================================
 # THERMODYNAMIC CORRECTIONS
+#
 # =========================================================
 
 def free_calcium(ca, citrate):
@@ -259,6 +274,7 @@ def normalize(x):
 
 # =========================================================
 # SORT DATA BY pH FOR PLOTTING
+#Here, sorting the data by pH to demonstrate the relationship between pH and kidney stone formation.
 # =========================================================
 
 df_spec = final_df.sort_values("ph").copy()
@@ -271,6 +287,7 @@ oxalate  = np.clip(normalize(df_spec["ox_effective"]),     0, 1)
 
 # =========================================================
 # PH CURVE FOR EQUILIBRIUM LINES
+#This curve demonstrates how the pH of the system, the urine sample, changes as the urine samples change, as mentioned before.
 # =========================================================
 
 ph_curve = np.linspace(4.5, 8.0, 500)
@@ -316,6 +333,7 @@ oxalate_eq   = np.zeros_like(ph_curve)
 
 # =========================================================
 # FIGURE 1: THERMODYNAMIC BEHAVIOUR PLOT
+#These plots will demonstrate the ion activity behavior, depending on the concentration of the salts.
 # =========================================================
 
 fig, ax = plt.subplots(figsize=(14, 10), facecolor="#f7f5f2")
@@ -393,6 +411,7 @@ print("\nSaved: thermodynamic_behaviour.png")
 
 # =========================================================
 # RISK MODEL
+#We model our risk, using the RSS values provided by Equil2. RSS>1 = supersaturation (high risk). RSS<1 = undersaturation (low risk).
 # =========================================================
 
 # ----------------------------------------------------------
@@ -443,6 +462,7 @@ final_df["magnesium_protection"] = normalize(final_df["magnesium_mmol_L"])
 
 # ----------------------------------------------------------
 # STONE RISK SCORE (weighted composite)
+# At this point we are assigning risk scores based on the Equil2 data. The three categrories are high risk, medium risk and low risk. Medium risk, would be values that fall int he middle of the low and high risk range.
 # ----------------------------------------------------------
 
 final_df["stone_risk_score"] = np.clip(
@@ -482,12 +502,14 @@ final_df["stone_risk_label"] = final_df["stone_risk_score"].apply(classify_risk)
 
 # =========================================================
 # PATIENT IDs
+# After assigning the risks, we are reinputting the patient ID factors. This would include the age, weight, gender, and BMI. The individuals are also identified by whether of not they have hyertension and/or diabetes. This is as provided on the data table we used.
 # =========================================================
 
 final_df["patient_id"] = np.arange(1, len(final_df) + 1)
 
 # =========================================================
 # RESULTS TABLE
+#This creates a table, similar to the table of our input data, that would now include the risk assessment as part of the data.
 # =========================================================
 
 risk_results = final_df[[
@@ -536,6 +558,7 @@ print(high_risk.head(20).to_string())
 
 # =========================================================
 # FIGURE 2: RISK SCORE DISTRIBUTION
+# This generates a risk distrubtion to see the density of risk levels in this set of patients.
 # =========================================================
 
 fig, axes = plt.subplots(1, 2, figsize=(16, 6), facecolor="#f7f5f2")
